@@ -1,0 +1,8 @@
+{
+  "DataDir": "./data",
+  "StaticURL": "https://bct.tmix.se/Tmix.Cap.TdExport.WebApi/gtfs/?operatorIds=48",
+  "AlertsURL": "https://bct.tmix.se/gtfs-realtime/alerts.pb?operatorIds=48",
+  "TripUpdatesURL": "https://bct.tmix.se/gtfs-realtime/tripupdates.pb?operatorIds=48",
+  "VehicleUpdatesURL": "https://bct.tmix.se/gtfs-realtime/vehicleupdates.pb?operatorIds=48",
+  "TimeZone": "America/Vancouver"
+}
