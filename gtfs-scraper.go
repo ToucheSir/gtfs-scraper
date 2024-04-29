@@ -70,21 +70,24 @@ func main() {
 		log.Panicln(err)
 	}
 
-	if command == "alerts" {
+	switch command {
+	case "alerts":
 		feed, err := extractFeed(config.AlertsURL)
 		if err != nil {
 			log.Panicln(err)
 		}
 		log.Println(feed)
 		log.Panicln("archiving alerts not implemented")
-	} else if command == "tripupdates" {
+	case "tripupdates":
 		log.Panicln("archiving trip updates not implemented")
-	} else if command == "vehicleupdates" {
+	case "vehicleupdates":
 		feed, err := extractFeed(config.VehicleUpdatesURL)
 		if err != nil {
 			log.Panicln(err)
 		}
-		addVehiclePositions(feed, db, timeZone)
+		err = addVehiclePositions(feed, db, timeZone)
+		if err != nil {
+			log.Panicln(err)
+		}
 	}
-
 }

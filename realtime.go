@@ -5,12 +5,40 @@ import (
 	"io"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs"
 	_ "github.com/mattn/go-sqlite3"
 	"google.golang.org/protobuf/proto"
 )
+
+type ColumnInfo struct {
+	Name string
+	Type string
+}
+
+var columns = []ColumnInfo{
+	{Name: "trip_id", Type: "TEXT"},
+	{Name: "route_id", Type: "TEXT"},
+	{Name: "direction_id", Type: "INT8"},
+	{Name: "start_time", Type: "DATETIME"},
+	{Name: "schedule_relationship", Type: "INT8"},
+	{Name: "latitude", Type: "REAL"},
+	{Name: "longitude", Type: "REAL"},
+	{Name: "bearing", Type: "REAL"},
+	{Name: "odometer", Type: "REAL"},
+	{Name: "speed", Type: "REAL"},
+	{Name: "current_stop_sequence", Type: "INTEGER"},
+	{Name: "stop_id", Type: "TEXT"},
+	{Name: "current_status", Type: "INT8"},
+	{Name: "timestamp", Type: "DATETIME"},
+	{Name: "congestion_level", Type: "INT8"},
+	{Name: "occupancy_status", Type: "INT8"},
+	{Name: "vehicle_id", Type: "TEXT"},
+	{Name: "vehicle_label", Type: "TEXT"},
+	{Name: "license_plate", Type: "TEXT"},
+}
 
 // setupDatabase initializes and sets up the SQLite database for storing vehicle positions.
 // It takes the data directory path as input and returns a pointer to the sql.DB object and an error, if any.
@@ -21,30 +49,24 @@ func setupDatabase(dataDir string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS vehicle_positions (
-			trip_id TEXT,
-			start_time DATETIME,
-			schedule_relationship INT8,
-			latitude REAL,
-			longitude REAL,
-			bearing REAL,
-			odometer REAL,
-			speed REAL,
-			current_stop_sequence INTEGER,
-			stop_id TEXT,
-			current_status INT8,
-			timestamp DATETIME,
-			congestion_level INT8,
-			occupancy_status INT8,
-			vehicle_id TEXT,
-			vehicle_label TEXT,
-			license_plate TEXT,
-			UNIQUE(trip_id, timestamp)
-		)
-	`)
+	// Enabled for data integrity reasons
+	_, err = db.Exec("PRAGMA journal_mode=WAL")
 	if err != nil {
-		return nil, err
+		return db, err
+	}
+
+	var query strings.Builder
+	query.WriteString("CREATE TABLE IF NOT EXISTS vehicle_positions (")
+	for _, colInfo := range columns {
+		query.WriteString(colInfo.Name)
+		query.WriteString(" ")
+		query.WriteString(colInfo.Type)
+		query.WriteString(",\n")
+	}
+	query.WriteString("UNIQUE(trip_id, timestamp))")
+	_, err = db.Exec(query.String())
+	if err != nil {
+		return db, err
 	}
 	return db, nil
 }
@@ -58,28 +80,19 @@ func addVehiclePositions(feed *gtfs.FeedMessage, db *sql.DB, location *time.Loca
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`
-		INSERT INTO vehicle_positions (
-			trip_id,
-			start_time,
-			schedule_relationship,
-			latitude,
-			longitude,
-			bearing,
-			odometer,
-			speed,
-			current_stop_sequence,
-			stop_id,
-			current_status,
-			timestamp,
-			congestion_level,
-			occupancy_status,
-			vehicle_id,
-			vehicle_label,
-			license_plate
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT DO NOTHING
-	`)
+	var query strings.Builder
+	query.WriteString("INSERT INTO vehicle_positions (")
+	for _, colInfo := range columns[:len(columns)-1] {
+		query.WriteString(colInfo.Name)
+		query.WriteString(", ")
+	}
+	query.WriteString(columns[len(columns)-1].Name)
+	query.WriteString(") VALUES (")
+	for range columns[:len(columns)-1] {
+		query.WriteString("?, ")
+	}
+	query.WriteString("?) ON CONFLICT DO NOTHING")
+	stmt, err := tx.Prepare(query.String())
 	if err != nil {
 		return err
 	}
@@ -92,14 +105,20 @@ func addVehiclePositions(feed *gtfs.FeedMessage, db *sql.DB, location *time.Loca
 		trip := vehicle.GetTrip()
 		position := vehicle.GetPosition()
 		vehicleInfo := vehicle.GetVehicle()
-		startTime, err := time.ParseInLocation("20060102 15:04:05", trip.GetStartDate()+" "+trip.GetStartTime(), &location)
+
+		var startTime time.Time
+		if trip != nil {
+			startTime, err = time.ParseInLocation("20060102 15:04:05", trip.GetStartDate()+" "+trip.GetStartTime(), location)
+		}
 		if err != nil {
 			return err
 		}
 
 		_, err = stmt.Exec(
 			trip.GetTripId(),
-			startTime,
+			trip.GetRouteId(),
+			trip.GetDirectionId(),
+			startTime.Unix(),
 			trip.GetScheduleRelationship(),
 			position.GetLatitude(),
 			position.GetLongitude(),
@@ -109,7 +128,7 @@ func addVehiclePositions(feed *gtfs.FeedMessage, db *sql.DB, location *time.Loca
 			vehicle.GetCurrentStopSequence(),
 			vehicle.GetStopId(),
 			vehicle.GetCurrentStatus(),
-			time.Unix(int64(vehicle.GetTimestamp()), 0),
+			vehicle.GetTimestamp(),
 			vehicle.GetCongestionLevel(),
 			vehicle.GetOccupancyStatus(),
 			vehicleInfo.GetId(),

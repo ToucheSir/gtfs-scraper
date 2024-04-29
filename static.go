@@ -62,7 +62,6 @@ func downloadStatic(outputDir string, url string) {
 		if err != nil {
 			log.Panicln(err)
 		}
-		log.Println(oldFilename)
 		oldHash := sha1.New()
 		_, cerr = io.Copy(oldHash, oldFile)
 		if cerr != nil {
@@ -76,6 +75,8 @@ func downloadStatic(outputDir string, url string) {
 		// Clean up new file if contents are unchanged
 		if bytes.Equal(oldHash.Sum(nil), newHash.Sum(nil)) {
 			defer os.Remove(outputFilename)
+		} else {
+			log.Printf("Downloaded static GTFS data: %s\n", outputFilename)
 		}
 	} else if !errors.Is(err, os.ErrExist) {
 		log.Panicln(err)
