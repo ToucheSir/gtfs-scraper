@@ -1,6 +1,6 @@
 module github.com/touchesir/gtfs-scraper
 
-go 1.21
+go 1.20
 
 require (
 	github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs v1.0.0

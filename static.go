@@ -2,17 +2,14 @@ package main
 
 import (
 	"bytes"
-	"cmp"
 	"crypto/sha1"
 	"errors"
 	"io"
-	"io/fs"
 	"log"
 	"mime"
 	"net/http"
 	"os"
 	"path"
-	"slices"
 )
 
 func downloadStatic(outputDir string, url string) {
@@ -35,20 +32,6 @@ func downloadStatic(outputDir string, url string) {
 	outputFilename := path.Join(outputDir, path.Clean(filename))
 	file, err := os.OpenFile(outputFilename, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0666)
 	if err == nil {
-		fileEntries, err := os.ReadDir(outputDir)
-		if err != nil {
-			log.Panicln(err)
-		}
-		oldFileInfo := slices.MaxFunc(fileEntries, func(a, b fs.DirEntry) int {
-			infoA, errA := a.Info()
-			infoB, errB := b.Info()
-			if errA != nil || errB != nil {
-				log.Panicf("Error reading file info: %v %v\n", errA, errB)
-			}
-			return cmp.Compare(infoA.ModTime().Unix(), infoB.ModTime().Unix())
-		})
-		oldFilename := oldFileInfo.Name()
-
 		nbtyes, cerr := io.Copy(file, resp.Body)
 		if cerr != nil {
 			log.Panicln(cerr)
@@ -57,7 +40,28 @@ func downloadStatic(outputDir string, url string) {
 			log.Panicf("Downloaded %d bytes but expected %d\n", nbtyes, resp.ContentLength)
 		}
 
-		// Check if file contents have changed.
+		fileEntries, err := os.ReadDir(outputDir)
+		if err != nil {
+			log.Panicln(err)
+		}
+		if len(fileEntries) == 0 {
+			return
+		}
+
+		// If there are existing files, check if file contents have changed.
+		var oldModTimestamp int64
+		var oldFilename string
+		for _, fileEntry := range fileEntries {
+			info, err := fileEntry.Info()
+			if err != nil {
+				log.Panicln(err)
+			}
+			modTimestamp := info.ModTime().Unix()
+			if modTimestamp > oldModTimestamp {
+				oldFilename = fileEntry.Name()
+			}
+		}
+
 		oldFile, err := os.OpenFile(path.Join(outputDir, oldFilename), os.O_RDONLY, 0666)
 		if err != nil {
 			log.Panicln(err)

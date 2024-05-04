@@ -6,8 +6,6 @@ import (
 	"os"
 	"path"
 	"time"
-
-	"slices"
 )
 
 type Config struct {
@@ -20,19 +18,9 @@ type Config struct {
 }
 
 func main() {
-	validCommands := []string{
-		"static",
-		"alerts",
-		"tripupdates",
-		"vehicleupdates",
-	}
-
 	command := "static"
 	if len(os.Args) > 1 {
 		command = os.Args[1]
-	}
-	if !slices.Contains(validCommands, command) {
-		log.Fatalf("Invalid command: %s\n", command)
 	}
 
 	contents, err := os.ReadFile("gtfs-scraper.json")
@@ -48,7 +36,7 @@ func main() {
 
 	if command == "static" {
 		staticDir := path.Join(config.DataDir, "static")
-		err = os.Mkdir(staticDir, 0666)
+		err = os.Mkdir(staticDir, 0775)
 		if err != nil && !os.IsExist(err) {
 			log.Panicln(err)
 		}
@@ -89,5 +77,7 @@ func main() {
 		if err != nil {
 			log.Panicln(err)
 		}
+	default:
+		log.Panicf("Invalid command: %s\n", command)
 	}
 }
