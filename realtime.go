@@ -71,6 +71,8 @@ func setupDatabase(dataDir string) (*sql.DB, error) {
 	return db, nil
 }
 
+const dateFormat = "20060102 15:04:05"
+
 // addVehiclePositions inserts vehicle positions into a SQLite database.
 // It takes a feed URL, a data directory path, and a time.Location as input.
 func addVehiclePositions(feed *gtfs.FeedMessage, db *sql.DB, location *time.Location) error {
@@ -108,7 +110,22 @@ func addVehiclePositions(feed *gtfs.FeedMessage, db *sql.DB, location *time.Loca
 
 		var startTime time.Time
 		if trip != nil {
-			startTime, err = time.ParseInLocation("20060102 15:04:05", trip.GetStartDate()+" "+trip.GetStartTime(), location)
+			startTimeStr := trip.GetStartTime()
+			startTime, err = time.ParseInLocation(dateFormat, trip.GetStartDate()+" "+startTimeStr, location)
+
+			// If we encouter a >24h offset, we need to parse it separately and then add
+			if err != nil && len(startTimeStr) > 3 {
+				hourOffset, err := time.ParseDuration(startTimeStr[:2] + "h")
+				if err != nil {
+					return err
+				}
+				startTimeStr = "00" + startTimeStr[3:]
+				startTime, err = time.ParseInLocation(dateFormat, trip.GetStartDate()+" "+startTimeStr, location)
+				if err != nil {
+					return err
+				}
+				startTime = startTime.Add(hourOffset)
+			}
 		}
 		if err != nil {
 			return err
