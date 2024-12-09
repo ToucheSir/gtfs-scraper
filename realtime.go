@@ -42,19 +42,20 @@ var columns = []ColumnInfo{
 func insertQuery() string {
 	var query strings.Builder
 	query.WriteString("INSERT INTO vehicle_positions (")
-	for _, colInfo := range columns[:len(columns)-1] {
+	for i, colInfo := range columns {
+		if i > 0 {
+			query.WriteByte(',')
+		}
 		query.WriteString(colInfo.Name)
-		query.WriteString(", ")
 	}
-	query.WriteString(columns[len(columns)-1].Name)
 	query.WriteString(") VALUES (")
-	for _, colInfo := range columns[:len(columns)-1] {
+	for i, colInfo := range columns {
+		if i > 0 {
+			query.WriteByte(',')
+		}
 		query.WriteByte(':')
 		query.WriteString(colInfo.Name)
-		query.WriteByte(',')
 	}
-	query.WriteByte(':')
-	query.WriteString(columns[len(columns)-1].Name)
 	query.WriteString(") ON CONFLICT DO NOTHING")
 
 	return query.String()
@@ -62,30 +63,33 @@ func insertQuery() string {
 
 type VehiclePosition struct {
 	TripId      string `db:"trip_id" parquet:"trip_id"`
-	RouteId     string `db:"route_id" parquet:"route_id"`
-	DirectionId byte   `db:"direction_id" parquet:"direction_id"`
+	RouteId     string `db:"route_id" parquet:"route_id,dict"`
+	DirectionId int32  `db:"direction_id" parquet:"direction_id"`
 	// Need to have two different fields for (de)serizialization from ProtoBuf -> SQLite -> Parquet.
 	// The Go SQLite driver force converts time.Time to TEXT, so we must use an int column instead.
 	// Parquet, however, does treat it as a 8-byte timestamp.
-	StartTime            time.Time `db:"-" parquet:"start_time"`
+	StartTime            time.Time `db:"-" parquet:"start_time,delta"`
 	StartTimeUnix        int64     `db:"start_time" parquet:"-"`
-	ScheduleRelationship byte      `db:"schedule_relationship" parquet:"schedule_relationship"`
-	Latitude             float32   `db:"latitude" parquet:"latitude"`
-	Longitude            float32   `db:"longitude" parquet:"longitude"`
-	Bearing              float32   `db:"bearing" parquet:"bearing"`
-	Odometer             float64   `db:"odometer" parquet:"odometer"`
+	ScheduleRelationship int32     `db:"schedule_relationship" parquet:"schedule_relationship"`
+	Latitude             float32   `db:"latitude" parquet:"latitude,split"`
+	Longitude            float32   `db:"longitude" parquet:"longitude,split"`
+	Bearing              float32   `db:"bearing" parquet:"bearing,split"`
+	Odometer             float64   `db:"odometer" parquet:"odometer,split"`
 	Speed                float32   `db:"speed" parquet:"speed"`
 	CurrentStopSequence  uint32    `db:"current_stop_sequence" parquet:"current_stop_sequence"`
-	StopId               string    `db:"stop_id" parquet:"stop_id"`
-	CurrentStatus        byte      `db:"current_status" parquet:"current_status"`
+	StopId               string    `db:"stop_id" parquet:"stop_id,dict"`
+	CurrentStatus        int32     `db:"current_status" parquet:"current_status"`
 	// Same treatment applies here
-	Timestamp       time.Time `db:"-" parquet:"timestamp"`
+	Timestamp       time.Time `db:"-" parquet:"timestamp,delta"`
 	TimestampUnix   int64     `db:"timestamp" parquet:"-"`
-	CongestionLevel byte      `db:"congestion_level" parquet:"congestion_level"`
-	OccupancyStatus byte      `db:"occupancy_status" parquet:"occupancy_status"`
-	VehicleId       string    `db:"vehicle_id" parquet:"vehicle_id"`
-	VehicleLabel    string    `db:"vehicle_label" parquet:"vehicle_label"`
-	LicensePlate    string    `db:"license_plate" parquet:"license_plate"`
+	CongestionLevel int32     `db:"congestion_level" parquet:"congestion_level"`
+	OccupancyStatus int32     `db:"occupancy_status" parquet:"occupancy_status"`
+	VehicleId       string    `db:"vehicle_id" parquet:"vehicle_id,dict"`
+	VehicleLabel    string    `db:"vehicle_label" parquet:"vehicle_label,dict"`
+	LicensePlate    string    `db:"license_plate" parquet:"license_plate,dict"`
+	// Only used for partitioning in Parquet
+	Year  int `parquet:"year"`
+	Month int `parquet:"month"`
 }
 
 const dateFormat = "20060102 15:04:05"
@@ -121,10 +125,10 @@ func (vp *VehiclePosition) fromFeedEntity(vehicle *gtfs.VehiclePosition, locatio
 
 	vp.TripId = trip.GetTripId()
 	vp.RouteId = trip.GetRouteId()
-	vp.DirectionId = byte(trip.GetDirectionId())
-	vp.StartTime = startTime
+	vp.DirectionId = int32(trip.GetDirectionId())
 	vp.StartTimeUnix = startTime.Unix()
-	vp.ScheduleRelationship = byte(trip.GetScheduleRelationship())
+	vp.StartTime = startTime.UTC()
+	vp.ScheduleRelationship = int32(trip.GetScheduleRelationship())
 	vp.Latitude = position.GetLatitude()
 	vp.Longitude = position.GetLongitude()
 	vp.Bearing = position.GetBearing()
@@ -132,13 +136,13 @@ func (vp *VehiclePosition) fromFeedEntity(vehicle *gtfs.VehiclePosition, locatio
 	vp.Speed = position.GetSpeed()
 	vp.CurrentStopSequence = vehicle.GetCurrentStopSequence()
 	vp.StopId = vehicle.GetStopId()
-	vp.CurrentStatus = byte(vehicle.GetCurrentStatus())
+	vp.CurrentStatus = int32(vehicle.GetCurrentStatus())
 	// The GTFS protobuf is wrong on this, because Unix timestamps are allowed to be negative.
 	// Thus it should be safe to truncate to the range of a signed int64.
 	vp.TimestampUnix = int64(vehicle.GetTimestamp())
-	vp.Timestamp = time.Unix(vp.TimestampUnix, 0)
-	vp.CongestionLevel = byte(vehicle.GetCongestionLevel())
-	vp.OccupancyStatus = byte(vehicle.GetOccupancyStatus())
+	vp.Timestamp = time.Unix(vp.TimestampUnix, 0).UTC()
+	vp.CongestionLevel = int32(vehicle.GetCongestionLevel())
+	vp.OccupancyStatus = int32(vehicle.GetOccupancyStatus())
 	vp.VehicleId = vehicleInfo.GetId()
 	vp.VehicleLabel = vehicleInfo.GetLabel()
 	vp.LicensePlate = vehicleInfo.GetLicensePlate()
@@ -148,18 +152,12 @@ func (vp *VehiclePosition) fromFeedEntity(vehicle *gtfs.VehiclePosition, locatio
 
 // setupDatabase initializes and sets up the SQLite database for storing vehicle positions.
 // It takes the data directory path as input and returns a pointer to the sql.DB object and an error, if any.
-func setupDatabase(dataDir string) (*sqlx.DB, error) {
+func setupDatabase(dataDir string) *sqlx.DB {
 	dbPath := filepath.Join(dataDir, "realtime.db")
-	db, err := sqlx.Open("sqlite3", dbPath)
-	if err != nil {
-		return nil, err
-	}
+	db := sqlx.MustOpen("sqlite3", dbPath)
 
 	// Enabled for data integrity reasons
-	_, err = db.Exec("PRAGMA journal_mode=WAL")
-	if err != nil {
-		return db, err
-	}
+	db.MustExec("PRAGMA journal_mode=WAL")
 
 	var query strings.Builder
 	query.WriteString("CREATE TABLE IF NOT EXISTS vehicle_positions (")
@@ -170,11 +168,8 @@ func setupDatabase(dataDir string) (*sqlx.DB, error) {
 		query.WriteString(",\n")
 	}
 	query.WriteString("UNIQUE(trip_id, timestamp))")
-	_, err = db.Exec(query.String())
-	if err != nil {
-		return db, err
-	}
-	return db, nil
+	db.MustExec(query.String())
+	return db
 }
 
 // addVehiclePositions inserts vehicle positions into a SQLite database.
@@ -183,7 +178,7 @@ func addVehiclePositions(feed *gtfs.FeedMessage, db *sqlx.DB, location *time.Loc
 	tx := db.MustBegin()
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(insertQuery())
+	stmt, err := tx.PrepareNamed(insertQuery())
 	if err != nil {
 		return err
 	}
@@ -194,11 +189,7 @@ func addVehiclePositions(feed *gtfs.FeedMessage, db *sqlx.DB, location *time.Loc
 		}
 		var vp VehiclePosition
 		vp.fromFeedEntity(entity.Vehicle, location)
-
-		_, err = stmt.Exec(&vp)
-		if err != nil {
-			return err
-		}
+		stmt.MustExec(&vp)
 	}
 
 	err = tx.Commit()
