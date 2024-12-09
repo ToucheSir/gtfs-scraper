@@ -6,6 +6,8 @@ import (
 	"os"
 	"path"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 type Config struct {
@@ -44,20 +46,6 @@ func main() {
 		return
 	}
 
-	db, err := setupDatabase(config.DataDir)
-	if err != nil {
-		log.Panicln(err)
-	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			log.Panicln(err)
-		}
-	}()
-	timeZone, err := time.LoadLocation(config.TimeZone)
-	if err != nil {
-		log.Panicln(err)
-	}
-
 	switch command {
 	case "alerts":
 		feed, err := extractFeed(config.AlertsURL)
@@ -73,7 +61,41 @@ func main() {
 		if err != nil {
 			log.Panicln(err)
 		}
+
+		db := setupDatabase(config.DataDir)
+		defer func() {
+			if err := db.Close(); err != nil {
+				log.Panicln(err)
+			}
+		}()
+
+		timeZone, err := time.LoadLocation(config.TimeZone)
+		if err != nil {
+			log.Panicln(err)
+		}
 		err = addVehiclePositions(feed, db, timeZone)
+		if err != nil {
+			log.Panicln(err)
+		}
+	case "archive":
+		dbPath := path.Join(config.DataDir, "realtime.db")
+		if len(os.Args) > 2 {
+			dbPath = os.Args[2]
+		}
+		db := sqlx.MustOpen("sqlite3", dbPath)
+		defer func() {
+			if err := db.Close(); err != nil {
+				log.Panicln(err)
+			}
+		}()
+
+		var archiveDir string
+		if len(os.Args) > 3 {
+			archiveDir = os.Args[3]
+		} else {
+			archiveDir = path.Join(config.DataDir, "archive")
+		}
+		err = archivePartitions(db, archiveDir)
 		if err != nil {
 			log.Panicln(err)
 		}
