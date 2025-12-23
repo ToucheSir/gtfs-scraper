@@ -150,8 +150,7 @@ func (vp *VehiclePosition) fromFeedEntity(vehicle *gtfs.VehiclePosition, locatio
 	return nil
 }
 
-// setupDatabase initializes and sets up the SQLite database for storing vehicle positions.
-// It takes the data directory path as input and returns a pointer to the sql.DB object and an error, if any.
+// setupDatabase initializes and creates the realtime vehicle positions SQLite database.
 func setupDatabase(dataDir string) *sqlx.DB {
 	dbPath := filepath.Join(dataDir, "realtime.db")
 	db := sqlx.MustOpen("sqlite3", dbPath)
@@ -167,13 +166,13 @@ func setupDatabase(dataDir string) *sqlx.DB {
 		query.WriteString(colInfo.Type)
 		query.WriteString(",\n")
 	}
-	query.WriteString("UNIQUE(trip_id, timestamp))")
+	query.WriteString("PRIMARY KEY(timestamp, trip_id))")
 	db.MustExec(query.String())
 	return db
 }
 
 // addVehiclePositions inserts vehicle positions into a SQLite database.
-// It takes a feed URL, a data directory path, and a time.Location as input.
+// Timestamps from the feed are localized to the specified location.
 func addVehiclePositions(feed *gtfs.FeedMessage, db *sqlx.DB, location *time.Location) error {
 	tx := db.MustBegin()
 	defer tx.Rollback()
@@ -189,6 +188,12 @@ func addVehiclePositions(feed *gtfs.FeedMessage, db *sqlx.DB, location *time.Loc
 		}
 		var vp VehiclePosition
 		vp.fromFeedEntity(entity.Vehicle, location)
+		// The BC Transit feed will occasionally publish entries with identical vehicle_ids and timestamps,
+		// but a zero start_time and other trip-related fields missing.
+		// Ignore these to avoid violating the primary key constraint.
+		if vp.StartTime.IsZero() {
+			continue
+		}
 		stmt.MustExec(&vp)
 	}
 
@@ -201,9 +206,7 @@ func addVehiclePositions(feed *gtfs.FeedMessage, db *sqlx.DB, location *time.Loc
 }
 
 // extractFeed retrieves a GTFS feed from the specified URL and returns a FeedMessage.
-// It makes an HTTP GET request to the feedURL, reads the response body, and unmarshals
-// the data into a FeedMessage struct using protocol buffers.
-// If any error occurs during the process, it returns an empty FeedMessage and the error.
+// Returns an empty FeedMessage and error if extraction fails.
 func extractFeed(feedURL string) (*gtfs.FeedMessage, error) {
 	resp, err := http.Get(feedURL)
 	if err != nil {

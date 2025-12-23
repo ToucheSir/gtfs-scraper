@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"path"
+	"path/filepath"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -37,7 +37,7 @@ func main() {
 	}
 
 	if command == "static" {
-		staticDir := path.Join(config.DataDir, "static")
+		staticDir := filepath.Join(config.DataDir, "static")
 		err = os.Mkdir(staticDir, 0775)
 		if err != nil && !os.IsExist(err) {
 			log.Panicln(err)
@@ -78,7 +78,7 @@ func main() {
 			log.Panicln(err)
 		}
 	case "archive":
-		dbPath := path.Join(config.DataDir, "realtime.db")
+		dbPath := filepath.Join(config.DataDir, "realtime.db")
 		if len(os.Args) > 2 {
 			dbPath = os.Args[2]
 		}
@@ -93,7 +93,7 @@ func main() {
 		if len(os.Args) > 3 {
 			archiveDir = os.Args[3]
 		} else {
-			archiveDir = path.Join(config.DataDir, "archive")
+			archiveDir = filepath.Join(config.DataDir, "archive")
 		}
 		err = archivePartitions(db, archiveDir)
 		if err != nil {

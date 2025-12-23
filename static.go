@@ -9,7 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
-	"path"
+	"path/filepath"
 )
 
 func downloadStatic(outputDir string, url string) {
@@ -29,7 +29,7 @@ func downloadStatic(outputDir string, url string) {
 	}
 	filename := params["filename"]
 
-	outputFilename := path.Join(outputDir, path.Clean(filename))
+	outputFilename := filepath.Join(outputDir, filepath.Clean(filename))
 	file, err := os.OpenFile(outputFilename, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0666)
 	if err == nil {
 		nbtyes, cerr := io.Copy(file, resp.Body)
@@ -62,7 +62,7 @@ func downloadStatic(outputDir string, url string) {
 			}
 		}
 
-		oldFile, err := os.OpenFile(path.Join(outputDir, oldFilename), os.O_RDONLY, 0666)
+		oldFile, err := os.OpenFile(filepath.Join(outputDir, oldFilename), os.O_RDONLY, 0666)
 		if err != nil {
 			log.Panicln(err)
 		}
