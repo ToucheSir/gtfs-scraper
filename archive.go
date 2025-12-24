@@ -64,9 +64,7 @@ const partitionQuery = `
 		occupancy_status,
 		vehicle_id,
 		vehicle_label,
-		license_plate,
-		strftime('%Y', timestamp, 'unixepoch') AS year,
-		strftime('%m', timestamp, 'unixepoch') AS month
+		license_plate
 	FROM vehicle_positions WHERE timestamp >= ? AND timestamp < ?
 `
 
@@ -77,25 +75,27 @@ func queryPartition(db *sqlx.DB, startTime time.Time, endTime time.Time) (*sqlx.
 
 const rowGroupSize = 1_000_000
 
-func findLastUpdates(reader *parquet.GenericReader[VehiclePosition], lastVehicleUpdates map[string]time.Time) error {
+func findLastUpdates(reader *parquet.GenericReader[VehiclePosition], lastVehicleUpdates map[string]time.Time) (validCount int64, err error) {
 	buffer := make([]VehiclePosition, rowGroupSize)
-	for {
+	for eof := false; !eof; {
 		n, err := reader.Read(buffer)
 		if errors.Is(err, io.EOF) {
-			break
+			eof = true
 		} else if err != nil {
-			return err
+			return 0, err
 		}
+
 		for _, vp := range buffer[:n] {
 			if vp.VehicleId == "" {
 				continue
 			}
+			validCount++
 			if lastUpdate, found := lastVehicleUpdates[vp.VehicleId]; !found || vp.Timestamp.After(lastUpdate) {
 				lastVehicleUpdates[vp.VehicleId] = vp.Timestamp
 			}
 		}
 	}
-	return nil
+	return validCount, nil
 }
 
 func writePartition(db *sqlx.DB, archiveDir string, period time.Time) (err error) {
@@ -113,20 +113,21 @@ func writePartition(db *sqlx.DB, archiveDir string, period time.Time) (err error
 
 	stagingPath := filePath
 	oldFile, err := os.Open(filePath)
+	var validCount int64
 	if err == nil {
 		defer oldFile.Close()
 		oldReader = parquet.NewGenericReader[VehiclePosition](oldFile)
 		defer oldReader.Close()
 
 		log.Printf("%s: found %d rows in existing file\n", ym, oldReader.NumRows())
-		if err := findLastUpdates(oldReader, lastVehicleUpdates); err != nil {
+		validCount, err = findLastUpdates(oldReader, lastVehicleUpdates)
+		if err != nil {
 			return err
 		}
 		oldReader.Reset()
 		log.Printf("%s: found updates for %d vehicles\n", ym, len(lastVehicleUpdates))
 		stagingPath = filePath + ".tmp"
 	} else if !errors.Is(err, os.ErrNotExist) {
-		log.Panicln(err)
 		return err
 	}
 
@@ -151,8 +152,8 @@ func writePartition(db *sqlx.DB, archiveDir string, period time.Time) (err error
 		log.Printf("%s: copied %d rows from existing file\n", ym, n)
 		if err != nil {
 			return err
-		} else if oldReader.NumRows() != n {
-			log.Panicf("%s: expected to write %d parquet rows, wrote %d", ym, oldReader.NumRows(), n)
+		} else if validCount != n {
+			log.Panicf("%s: expected to write %d parquet rows, wrote %d", ym, validCount, n)
 		}
 	}
 
@@ -182,6 +183,8 @@ func writePartition(db *sqlx.DB, archiveDir string, period time.Time) (err error
 		}
 		vp.StartTime = time.Unix(vp.StartTimeUnix, 0)
 		vp.Timestamp = time.Unix(vp.TimestampUnix, 0)
+		vp.Year = period.Year()
+		vp.Month = int(period.Month())
 
 		// Don't append duplicate rows to existing files
 		if lastUpdate, found := lastVehicleUpdates[vp.VehicleId]; found && !vp.Timestamp.After(lastUpdate) {
